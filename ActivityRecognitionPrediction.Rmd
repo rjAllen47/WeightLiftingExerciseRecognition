@@ -1,0 +1,179 @@
+---
+title: "Weight Lifting Exercise Recognition"
+author: "Risa Allen"
+date: "November 20, 2015"
+output: 
+    html_document:
+        toc: true
+        theme: united
+        highlight: kate
+---
+
+## Executive Summary
+In this project, we were asked to use a machine learning algorithm to predict 
+the manner in which dumbbell lifts were performed. The dataset contains 
+readings from accelerometers on the *belt*, *forearm*, *arm*, and *dumbbell* of 6 
+participants while performing *Unilateral Dumbbell Bicep Curls* in 5 different 
+ways. Using random forests and 5-fold cross validation, we developed a model 
+that has an estimated out of sample error of less than 1%. Finally, this model
+was used to predict the class for 20 test cases with 100% accuracy.
+
+## Background
+The original training data consists of **19622** observations of **160** 
+variables. The parcipants were asked to perform dumbbell lifts in the following 
+5 ways, as captured in the `classe` variable:
+
+Class | Quality of Dumbbell Lift Execution     | Frequency in Training Set
+------|----------------------------------------|--------------------------
+A     | Exactly according to the specification | 5580
+B     | Throwing the elbows to the front       | 3797
+C     | Lifting the dumbbell only halfway      | 3422
+D     | Lowering the dumbbell only halfway     | 3216
+E     | Throwing the hips to the front         | 3607
+
+For more information about the dataset used for this project, please see the
+*Weight Lifting Exercise Dataset* [(1)](#[1]) section here: 
+http://groupware.les.inf.puc-rio.br/har
+
+```{r, echo=FALSE, message=FALSE}
+# Load all libraries
+library(caret); library(randomForest); library(doMC); library(knitr); 
+library(plyr)
+
+# Run in parellel to increase speed of train function
+registerDoMC(cores = 5)
+```
+
+```{r, echo=FALSE}
+# Load the training and test sets
+trainURL <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testURL <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+training <- read.csv(trainURL)
+testing <- read.csv(testURL)
+```
+
+```{r, echo=FALSE, cache=TRUE}
+# Set the seed so our results are reproducible
+set.seed(9947)
+
+# Convert classe to a factor variable
+training$classe <- factor(training$classe) 
+
+# Remove variables with mostly NA values
+training <- training[,colSums(is.na(testing))<nrow(testing)]
+testing <- testing[,colSums(is.na(testing))<nrow(testing)]
+
+# Remove first 7 variables with no activity data
+training <- training[,-c(1:7)]
+testing <- testing[,-c(1:7)]
+```
+
+## Preprocessing
+### Feature Selection
+
+Before training our model, we want to select the most important features and
+eliminate any unnecessary variables in the orginal dataset.
+
+The first **7** variables can be removed since they do not provide any data 
+specific to the activity being performed. 
+
+Of the remaining **153** variables in 
+the training set, **100** of them contain very few values (97.9% `NAs`). 
+Those same variables contain entirely `NA` values in the test set and therefore 
+provide no predictive insight and can be excluded from our model features. 
+
+We can also eliminate variables with high pair-wise correlations in the
+dataset as shown below:
+```{r}
+# Get the correlation matrix for all predictors left in the dataset
+corMat <- cor(training[,-53])
+
+# Find the variables that can be removed based on high pair-wise correlation
+highCor <- findCorrelation(corMat, cutoff=0.9)
+
+# Remove highly correlated variables from both the training and testing datasets
+training <- training[,-c(highCor)]
+testing <- testing[,-c(highCor)]
+```
+
+The remaining **46** features were used to develop our model.
+
+### Data Partitioning
+We will split our original training set into training and validation, in order
+to calculate the expected out of sample error rate. Since our machine learning
+algorithm uses cross-validation to develop our model, separating the validation 
+set is not actually necessary, but it provides an additional out of sample error 
+estimate.
+
+```{r}
+inTrain <- createDataPartition(y=training$classe, p=0.8, list=FALSE)
+training <- training[inTrain,]
+validation <- training[-inTrain,]
+```
+
+## Model Training
+Using the random forests algorithm and 5-fold cross validation, we fit a model 
+to our training dataset. Random forests was chosen because it is a highly
+accurate classification algorithm that does well with large amounts of data and 
+tends to be robust against overfitting.
+
+```{r, cache=TRUE}
+modelFit <- train(classe ~ ., data = training, method = "rf", 
+                trControl = trainControl(method = "cv", number = 5),
+                importance=TRUE)
+```
+
+The random forests algorithm allows us to estimate the most important variables
+in the classification, which in our model are `yaw_belt`, `pitch_belt`, 
+`pitch_forearm`, `magnet_dumbbell_z`, and `magnet_dumbbell_y` respectively.
+
+## Out of Sample Error Estimate
+### Model Fit
+
+Another benefit of using random forests is that the OOB (out-of-bag) error rate 
+reported in the final model gives an unbiased estimate of the error in the test 
+set. This is because it works by constructing each tree using different 
+bootstrap samples from the training set, setting about a third of the 
+observations out of each sample and using those to test the classification for 
+that particular tree. Because the random forest method estimates the test set 
+error as the model is constructed, the OOB error rate is a good indication of 
+the prediction error we would expect to see for new data. The OOB estimate for
+our model is only 0.54% and the accuracy is expected to be over 99%.
+
+```{r}
+modelFit$finalModel
+modelFit$results
+```
+
+### Validation Set
+To test our model further, we used it to predict the `classe` variable on our 
+validation set. The confusion matrix below shows that our model accurately 
+predicted all values in our validation set.
+```{r}
+valPred <- predict(modelFit, validation)
+confusionMatrix(valPred, validation$classe)
+```
+
+This is verified by calculating the accuracy of our predictions (in percent):
+```{r}
+predAccuracy <- sum(valPred==validation$class)/nrow(validation)*100
+predAccuracy
+```
+
+This value may be slightly overstated, but based on both the OOB error rate and
+our predictions for the validation set, it fair to say that our expected
+error rate on new data is around 1% or less.
+
+## Test Case Predictions
+Using our model, we obtained the following predictions for our test set, which
+proved to be correct upon submission.
+```{r}
+testPred <- predict(modelFit, testing)
+testPred
+```
+
+## References
+[1] Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative 
+Activity Recognition of Weight Lifting Exercises. Proceedings of 4th 
+International Conference in Cooperation with SIGCHI (Augmented Human '13). 
+Stuttgart, Germany: ACM SIGCHI, 2013
